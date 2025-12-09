@@ -158,3 +158,88 @@ model \= tf.keras.Sequential()
 4.  **训练可视化：** 绘制 V2 和 V3 的训练曲线对比。
 
 **你是否同意使用 INRIA 数据集作为替代方案？** (这能为你节省至少 2-3 天的数据处理时间)
+
+
+----
+
+### 关键词
+* 诸如**深度可分离卷积**、**反向残差**和**注意力机制**等架构创新使得在不牺牲准确性的前提下压缩模型复杂度成为可能。
+* 一系列优化技术，包括**量化感知训练（QAT）**、**结构化剪枝**、**知识蒸馏**和**低秩分解**，显著降低了深度模型的运行时间和内存需求 。
+* ，引入了**神经架构搜索（NAS）**框架（例如MCUNet和TinyNAS），这些框架能够协同优化模型拓扑和部署约束，已经证明ImageNet规模的任务可以在仅配备480 kB SRAM的MCU上执行 。
+* new developments in **on-device** and **continual learning** allow models to adapt in real-time under strict memory and compute constraints, further extending the practicality of TinyDL systems
+
+---
+
+## Tiny ML and Tiny DL 模型评测指标和方法
+
+
+### 1. 四大核心评测指标 (The Big Four Metrics)
+
+#### A. 精度 (Accuracy / Quality)
+这是底线。如果模型预测不对，再快也没用。
+* **指标：** Top-1 Accuracy (分类), mAP (目标检测), F1-Score (异常检测)。
+* **TinyML 特点：** 我们通常追求**“足够好” (Good Enough)** 而不是 SOTA。
+    * *例子：* ResNet-50 在 ImageNet 上有 76% 的精度，MobileNetV1 可能只有 70%。但在 MCU 上，为了能跑起来，我们愿意接受这 6% 的损失。
+
+#### B. 延迟 (Latency / Inference Time)
+这是实时性的关键。
+* **定义：** 处理**单次**推理（Inference）所需的时间（ms）。
+* **指标：** `ms per inference`。
+* **TinyML 特点：** 这直接决定了应用场景。
+    * *电机故障检测：* 需要 < 10ms (为了快速停机)。
+    * *VWW (人检测)：* < 200ms 就够了（人走得慢）。
+
+#### C. 能耗 (Energy / Power Consumption) —— *最硬核的指标*
+这是嵌入式设备的命门。
+* **定义：** 完成一次推理消耗的能量。
+* **指标：** **微焦耳 ($\mu J$ / inference)** 或 **毫瓦 (mW)**。
+* **换算：** `Energy (J) = Power (W) × Time (s)`。
+* **TinyML 特点：** 我们不仅看推理时的功耗，还要看**空闲/睡眠功耗**。如果你的 NPU 很快，但待机漏电严重，那也是不合格的。
+
+#### D. 内存占用 (Memory Footprint) —— *生死的门槛*
+这是决定模型“能不能装进去”的硬指标。你必须区分两种内存：
+1.  **Flash (Read-Only / NVM):** 存放**模型权重 (Weights)** 和 **代码 (Code)**。
+    * *评测点：* 模型文件大小 (Model Size)。
+2.  **SRAM (Read-Write / Volatile):** 存放**激活值 (Activations)**、**输入/输出缓冲**和**中间变量**。
+    * *评测点：* **Peak RAM Usage (峰值内存)**。这是最大的瓶颈！很多模型权重只有 100KB，但中间层的 Feature Map 需要 500KB RAM，这在只有 256KB RAM 的 MCU 上直接 OOM (Out of Memory)。
+
+---
+
+### 2. 评测方法论 (Methodologies)
+
+如何测量上述指标？行业内分为三个层级：
+
+#### 层级 1：理论计算 (Theoretical Counting) —— *看纸面数据*
+* **方法：** 计算模型的 **MACs** (Multiply-Accumulate Operations，乘加运算数) 或 **FLOPs** (浮点运算数)。
+* **用途：** 快速估算模型复杂度。
+* **陷阱：** **FLOPs $\neq$ Latency**。
+    * 在 MCU 上，**内存访问 (Memory Access)** 往往比计算更耗时。一个 FLOPs 很低但内存读写频繁的模型（如 ShuffleNet），在某些 MCU 上可能比 FLOPs 高但结构规整的模型（如 MobileNet）跑得更慢。
+
+#### 层级 2：软件仿真 (Software Simulation) —— *开发阶段*
+* **方法：** 使用指令集模拟器 (ISS)，如 Arm 的 **FVP (Fixed Virtual Platforms)** 或 **Renode**。
+* **用途：** 在没有硬件板子时，通过 Profiling 工具查看具体的 Cycle Count (时钟周期数) 和 内存峰值。
+* **工具：** **STM32Cube.AI** 的 "Analyze" 功能极其强大，它能静态分析出模型需要的确切 Flash 和 RAM 大小。
+
+#### 层级 3：硬件在环 (Hardware-in-the-Loop, HIL) —— *最终验收*
+这是最真实、也是 MLPerf 采用的标准方法。
+
+1.  **测延迟：**
+    * **GPIO 法（最准）：** 推理开始前拉高一个 GPIO 引脚，推理结束后拉低。用**示波器**测量高电平持续时间。
+    * **SysTick 法：** 在代码里读取 MCU 的系统时钟计数器。
+2.  **测能耗：**
+    * 使用**高精度电源分析仪**（如 **Nordic PPK2** 或 Joulescope）。
+    * 将其串联在开发板的电源输入端，以高采样率（如 100kHz）记录电流波形，然后积分计算能量。
+
+---
+
+### 3. 综合评估图表：帕累托前沿 (Pareto Frontier)
+
+在 TinyML 论文或技术报告中，你不能只列一个表格。最专业的展示方式是画 **Accuracy-Latency Trade-off 曲线**（帕累托前沿）。
+
+
+
+* **X 轴：** 延迟 (Latency) 或 模型大小 (Model Size) —— *越小越好*。
+* **Y 轴：** 准确率 (Accuracy) —— *越高越好*。
+* **点：** 每一个点代表一个模型（或同一个模型的不同量化版本）。
+* **前沿 (Frontier)：** 位于最左上角的那些点，代表了当前的**最优解**（在同等延迟下精度最高，或同等精度下延迟最低）。
+
